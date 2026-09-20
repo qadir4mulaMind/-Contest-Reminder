@@ -107,3 +107,23 @@ h1 { font-size: 20px; font-weight: 700; }
     color: #64748b;
     font-size: 14px;
 }
+
+.card.ended {
+    opacity: 0.5;
+    border-left-color: #64748b;
+}
+
+.countdown {
+    color: #3b82f6;
+    font-weight: 700;
+}
+
+.card.live .countdown {
+    color: #ef4444;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
