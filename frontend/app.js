@@ -30,6 +30,13 @@ async function subscribeToPush() {
     if (!swRegistration) return false;
 
     try {
+        // ✅ FIX: Pehle check karo ki user already subscribed hai kya
+        const existingSubscription = await swRegistration.pushManager.getSubscription();
+        if (existingSubscription) {
+            console.log("Already subscribed, skipping new subscription");
+            return true;
+        }
+
         const res = await fetch(`${API}/api/vapid-public-key`);
         const { publicKey } = await res.json();
 
@@ -79,6 +86,17 @@ function updateNotifyButton() {
 async function enableNotifications() {
     if (!("Notification" in window)) {
         alert("Your browser doesn't support notifications");
+        return;
+    }
+
+    // ✅ FIX: Agar already granted hai toh dobara subscription mat banao
+    if (Notification.permission === "granted") {
+        const ok = await subscribeToPush();
+        if (ok) {
+            // Chupchap check karo, koi alert nahi
+            console.log("Notifications already enabled");
+        }
+        updateNotifyButton();
         return;
     }
 
