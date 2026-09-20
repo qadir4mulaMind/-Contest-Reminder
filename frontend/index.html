@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0f172a">
+    <title>Contest Reminder</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>🏆 Contest Reminder</h1>
+        <p id="status">Loading...</p>
+    </header>
+
+    <main>
+        <div class="tabs">
+            <button class="tab active" data-tab="today">Today</button>
+            <button class="tab" data-tab="upcoming">Upcoming</button>
+            <button class="tab" data-tab="live">🔴 Live</button>
+        </div>
+
+        <div id="contest-list"></div>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
