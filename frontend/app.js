@@ -33,16 +33,19 @@ function formatDuration(ms) {
     return `${seconds}s`;
 }
 
+function getEndTime(c) {
+    const start = new Date(c.start);
+    const durationMatch = (c.duration || "").match(/(\d+)h\s*(\d+)m/);
+    if (durationMatch) {
+        return new Date(start.getTime() + (parseInt(durationMatch[1]) * 60 + parseInt(durationMatch[2])) * 60000);
+    }
+    return new Date(start.getTime() + 2 * 60 * 60 * 1000);
+}
+
 function getStatusText(c) {
     const now = new Date();
     const start = new Date(c.start);
-    const durationMatch = (c.duration || "").match(/(\d+)h\s*(\d+)m/);
-    let end = new Date(start);
-    if (durationMatch) {
-        end = new Date(start.getTime() + (parseInt(durationMatch[1]) * 60 + parseInt(durationMatch[2])) * 60000);
-    } else {
-        end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
-    }
+    const end = getEndTime(c);
 
     if (now >= start && now <= end) {
         return { text: `🔴 LIVE • ${formatDuration(now - start)} elapsed`, cls: "live" };
@@ -63,13 +66,7 @@ function render() {
     } else if (currentTab === "live") {
         filtered = allContests.filter(c => {
             const now = new Date();
-            const start = new Date(c.start);
-            const durationMatch = (c.duration || "").match(/(\d+)h\s*(\d+)m/);
-            let end = new Date(start);
-            if (durationMatch) {
-                end = new Date(start.getTime() + (parseInt(durationMatch[1]) * 60 + parseInt(durationMatch[2])) * 60000);
-            }
-            return now >= start && now <= end;
+            return now >= new Date(c.start) && now <= getEndTime(c);
         });
     } else {
         filtered = allContests.filter(c => c.status === "upcoming").slice(0, 30);
@@ -108,7 +105,6 @@ function updateCountdowns() {
 
         const now = new Date();
         const start = new Date(startStr);
-
         const durationMatch = (duration || "").match(/(\d+)h\s*(\d+)m/);
         let end = new Date(start);
         if (durationMatch) {
@@ -136,6 +132,97 @@ function startCountdown() {
     countdownInterval = setInterval(updateCountdowns, 1000);
 }
 
+// ===== NOTIFICATIONS =====
+const NOTIFY_1H = 60 * 60 * 1000;
+const NOTIFY_15M = 15 * 60 * 1000;
+const NOTIFY_BUFFER = 5 * 60 * 1000;
+const notifiedContests = new Set();
+
+function updateNotifyButton() {
+    const btn = document.getElementById("notify-btn");
+    if (!btn) return;
+    if (Notification.permission === "granted") {
+        btn.classList.add("on");
+        btn.textContent = "🔔";
+        btn.title = "Notifications ON";
+    } else if (Notification.permission === "denied") {
+        btn.classList.remove("on");
+        btn.textContent = "🔕";
+        btn.title = "Notifications blocked";
+    } else {
+        btn.classList.remove("on");
+        btn.textContent = "🔔";
+        btn.title = "Click to enable notifications";
+    }
+}
+
+async function requestNotificationPermission() {
+    if (!("Notification" in window)) {
+        alert("Your browser doesn't support notifications");
+        return;
+    }
+    const perm = await Notification.requestPermission();
+    updateNotifyButton();
+    if (perm === "granted") {
+        new Notification("✅ Notifications enabled!", {
+            body: "You'll get alerts 1 hour and 15 min before contests.",
+            icon: "./icon-192.png"
+        });
+    }
+}
+
+function sendNotification(title, body, tag) {
+    if (Notification.permission !== "granted") return;
+    try {
+        const notif = new Notification(title, {
+            body: body,
+            icon: "./icon-192.png",
+            badge: "./icon-192.png",
+            tag: tag,
+            requireInteraction: true
+        });
+        notif.onclick = () => {
+            window.focus();
+            notif.close();
+        };
+    } catch (e) {
+        console.error("Notification error:", e);
+    }
+}
+
+function checkContestReminders() {
+    if (Notification.permission !== "granted") return;
+    const now = Date.now();
+
+    allContests.forEach(c => {
+        const timeUntil = new Date(c.start).getTime() - now;
+        if (timeUntil < 0) return;
+
+        const id1h = `${c.site}|${c.name}|1h`;
+        const id15m = `${c.site}|${c.name}|15m`;
+
+        if (timeUntil <= NOTIFY_1H + NOTIFY_BUFFER && timeUntil >= NOTIFY_1H - NOTIFY_BUFFER) {
+            if (!notifiedContests.has(id1h)) {
+                sendNotification(`⏰ 1 hour to go: ${c.site}`, `${c.name}\nStarts at ${c.start_time} IST`, id1h);
+                notifiedContests.add(id1h);
+            }
+        }
+
+        if (timeUntil <= NOTIFY_15M + NOTIFY_BUFFER && timeUntil >= NOTIFY_15M - NOTIFY_BUFFER) {
+            if (!notifiedContests.has(id15m)) {
+                sendNotification(`🚨 15 minutes: ${c.site}`, `${c.name}\nGet ready! Starts at ${c.start_time} IST`, id15m);
+                notifiedContests.add(id15m);
+            }
+        }
+    });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    updateNotifyButton();
+    const btn = document.getElementById("notify-btn");
+    if (btn) btn.addEventListener("click", requestNotificationPermission);
+});
+
 document.querySelectorAll(".tab").forEach(tab => {
     tab.addEventListener("click", () => {
         document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
@@ -146,6 +233,7 @@ document.querySelectorAll(".tab").forEach(tab => {
 });
 
 setInterval(loadContests, 5 * 60 * 1000);
+setInterval(checkContestReminders, 60 * 1000);
 loadContests();
 
 if ("serviceWorker" in navigator) {

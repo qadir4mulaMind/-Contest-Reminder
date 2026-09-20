@@ -1,10 +1,8 @@
-const CACHE = "contests-v1";
-const ASSETS = ["./", "./index.html", "./style.css", "./app.js", "./manifest.json"];
+const CACHE = "contests-v2";
+const ASSETS = ["./", "./index.html", "./style.css", "./app.js", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", event => {
-    event.waitUntil(
-        caches.open(CACHE).then(cache => cache.addAll(ASSETS))
-    );
+    event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
     self.skipWaiting();
 });
 
@@ -13,7 +11,6 @@ self.addEventListener("activate", event => {
 });
 
 self.addEventListener("fetch", event => {
-    // Don't cache API calls
     if (event.request.url.includes("/api/")) {
         return fetch(event.request);
     }
