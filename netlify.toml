@@ -1,0 +1,5 @@
+[build]
+  functions = "netlify/functions"
+
+[functions."check-contests"]
+  schedule = "@hourly"
