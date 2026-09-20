@@ -2,6 +2,104 @@ const API = "https://contest-reminder-api-t38o.onrender.com";
 let currentTab = "today";
 let allContests = [];
 let countdownInterval = null;
+let swRegistration = null;
+
+async function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return null;
+    try {
+        swRegistration = await navigator.serviceWorker.register("./sw.js");
+        console.log("SW registered");
+        return swRegistration;
+    } catch (e) {
+        console.error("SW error:", e);
+        return null;
+    }
+}
+
+function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const rawData = atob(base64);
+    return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
+
+async function subscribeToPush() {
+    if (!swRegistration) {
+        swRegistration = await registerServiceWorker();
+    }
+    if (!swRegistration) return false;
+
+    try {
+        const res = await fetch(`${API}/api/vapid-public-key`);
+        const { publicKey } = await res.json();
+
+        if (!publicKey) {
+            console.error("No VAPID public key from backend");
+            return false;
+        }
+
+        const subscription = await swRegistration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey),
+        });
+
+        const saveRes = await fetch(`${API}/api/subscribe`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(subscription),
+        });
+        const saveData = await saveRes.json();
+        console.log("Subscription saved:", saveData);
+
+        return true;
+    } catch (e) {
+        console.error("Push subscription failed:", e);
+        return false;
+    }
+}
+
+function updateNotifyButton() {
+    const btn = document.getElementById("notify-btn");
+    if (!btn) return;
+    if (Notification.permission === "granted") {
+        btn.classList.add("on");
+        btn.textContent = "🔔";
+        btn.title = "Notifications ON (server-side)";
+    } else if (Notification.permission === "denied") {
+        btn.classList.remove("on");
+        btn.textContent = "🔕";
+        btn.title = "Notifications blocked";
+    } else {
+        btn.classList.remove("on");
+        btn.textContent = "🔔";
+        btn.title = "Click to enable notifications";
+    }
+}
+
+async function enableNotifications() {
+    if (!("Notification" in window)) {
+        alert("Your browser doesn't support notifications");
+        return;
+    }
+
+    const perm = await Notification.requestPermission();
+    updateNotifyButton();
+
+    if (perm !== "granted") {
+        alert("Notifications blocked. Please allow from browser settings.");
+        return;
+    }
+
+    const ok = await subscribeToPush();
+    if (ok) {
+        new Notification("✅ Notifications enabled!", {
+            body: "You'll get alerts 1 hour and 15 min before contests, even when app is closed.",
+            icon: "./icon-192.png",
+        });
+    } else {
+        alert("Permission granted but push subscription failed. Check console.");
+    }
+}
 
 async function loadContests() {
     try {
@@ -35,10 +133,8 @@ function formatDuration(ms) {
 
 function getEndTime(c) {
     const start = new Date(c.start);
-    const durationMatch = (c.duration || "").match(/(\d+)h\s*(\d+)m/);
-    if (durationMatch) {
-        return new Date(start.getTime() + (parseInt(durationMatch[1]) * 60 + parseInt(durationMatch[2])) * 60000);
-    }
+    const m = (c.duration || "").match(/(\d+)h\s*(\d+)m/);
+    if (m) return new Date(start.getTime() + (parseInt(m[1]) * 60 + parseInt(m[2])) * 60000);
     return new Date(start.getTime() + 2 * 60 * 60 * 1000);
 }
 
@@ -78,51 +174,49 @@ function render() {
     }
 
     list.innerHTML = filtered.map(c => {
-        const statusInfo = getStatusText(c);
+        const s = getStatusText(c);
         return `
-        <div class="card ${statusInfo.cls}" data-start="${c.start}" data-duration="${c.duration}">
+        <div class="card ${s.cls}" data-start="${c.start}" data-duration="${c.duration}">
             <div class="card-header">
                 <span class="site ${c.site}">${c.site}</span>
                 <span class="time">${c.start_time}</span>
             </div>
             <div class="name">${c.name}</div>
             <div class="meta">
-                <span class="countdown">${statusInfo.text}</span>
+                <span class="countdown">${s.text}</span>
                 <span>⏱ ${c.duration}</span>
                 <span>📅 ${c.date}</span>
             </div>
             ${c.url ? `<a href="${c.url}" target="_blank">Open Contest →</a>` : ""}
         </div>
-    `}).join("");
+        `;
+    }).join("");
 }
 
 function updateCountdowns() {
     document.querySelectorAll(".card").forEach(card => {
         const startStr = card.dataset.start;
         const duration = card.dataset.duration;
-        const countdownEl = card.querySelector(".countdown");
-        if (!countdownEl || !startStr) return;
+        const el = card.querySelector(".countdown");
+        if (!el || !startStr) return;
 
         const now = new Date();
         const start = new Date(startStr);
-        const durationMatch = (duration || "").match(/(\d+)h\s*(\d+)m/);
+        const m = (duration || "").match(/(\d+)h\s*(\d+)m/);
         let end = new Date(start);
-        if (durationMatch) {
-            end = new Date(start.getTime() + (parseInt(durationMatch[1]) * 60 + parseInt(durationMatch[2])) * 60000);
-        } else {
-            end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
-        }
+        if (m) end = new Date(start.getTime() + (parseInt(m[1]) * 60 + parseInt(m[2])) * 60000);
+        else end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
 
         if (now >= start && now <= end) {
             card.classList.remove("upcoming");
             card.classList.add("live");
-            countdownEl.textContent = `🔴 LIVE • ${formatDuration(now - start)} elapsed`;
+            el.textContent = `🔴 LIVE • ${formatDuration(now - start)} elapsed`;
         } else if (now < start) {
-            countdownEl.textContent = `⏳ Starts in ${formatDuration(start - now)}`;
+            el.textContent = `⏳ Starts in ${formatDuration(start - now)}`;
         } else {
             card.classList.remove("upcoming", "live");
             card.classList.add("ended");
-            countdownEl.textContent = `✅ Ended`;
+            el.textContent = `✅ Ended`;
         }
     });
 }
@@ -132,95 +226,12 @@ function startCountdown() {
     countdownInterval = setInterval(updateCountdowns, 1000);
 }
 
-// ===== NOTIFICATIONS =====
-const NOTIFY_1H = 60 * 60 * 1000;
-const NOTIFY_15M = 15 * 60 * 1000;
-const NOTIFY_BUFFER = 5 * 60 * 1000;
-const notifiedContests = new Set();
-
-function updateNotifyButton() {
-    const btn = document.getElementById("notify-btn");
-    if (!btn) return;
-    if (Notification.permission === "granted") {
-        btn.classList.add("on");
-        btn.textContent = "🔔";
-        btn.title = "Notifications ON";
-    } else if (Notification.permission === "denied") {
-        btn.classList.remove("on");
-        btn.textContent = "🔕";
-        btn.title = "Notifications blocked";
-    } else {
-        btn.classList.remove("on");
-        btn.textContent = "🔔";
-        btn.title = "Click to enable notifications";
-    }
-}
-
-async function requestNotificationPermission() {
-    if (!("Notification" in window)) {
-        alert("Your browser doesn't support notifications");
-        return;
-    }
-    const perm = await Notification.requestPermission();
+document.addEventListener("DOMContentLoaded", async () => {
+    await registerServiceWorker();
     updateNotifyButton();
-    if (perm === "granted") {
-        new Notification("✅ Notifications enabled!", {
-            body: "You'll get alerts 1 hour and 15 min before contests.",
-            icon: "./icon-192.png"
-        });
-    }
-}
 
-function sendNotification(title, body, tag) {
-    if (Notification.permission !== "granted") return;
-    try {
-        const notif = new Notification(title, {
-            body: body,
-            icon: "./icon-192.png",
-            badge: "./icon-192.png",
-            tag: tag,
-            requireInteraction: true
-        });
-        notif.onclick = () => {
-            window.focus();
-            notif.close();
-        };
-    } catch (e) {
-        console.error("Notification error:", e);
-    }
-}
-
-function checkContestReminders() {
-    if (Notification.permission !== "granted") return;
-    const now = Date.now();
-
-    allContests.forEach(c => {
-        const timeUntil = new Date(c.start).getTime() - now;
-        if (timeUntil < 0) return;
-
-        const id1h = `${c.site}|${c.name}|1h`;
-        const id15m = `${c.site}|${c.name}|15m`;
-
-        if (timeUntil <= NOTIFY_1H + NOTIFY_BUFFER && timeUntil >= NOTIFY_1H - NOTIFY_BUFFER) {
-            if (!notifiedContests.has(id1h)) {
-                sendNotification(`⏰ 1 hour to go: ${c.site}`, `${c.name}\nStarts at ${c.start_time} IST`, id1h);
-                notifiedContests.add(id1h);
-            }
-        }
-
-        if (timeUntil <= NOTIFY_15M + NOTIFY_BUFFER && timeUntil >= NOTIFY_15M - NOTIFY_BUFFER) {
-            if (!notifiedContests.has(id15m)) {
-                sendNotification(`🚨 15 minutes: ${c.site}`, `${c.name}\nGet ready! Starts at ${c.start_time} IST`, id15m);
-                notifiedContests.add(id15m);
-            }
-        }
-    });
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-    updateNotifyButton();
     const btn = document.getElementById("notify-btn");
-    if (btn) btn.addEventListener("click", requestNotificationPermission);
+    if (btn) btn.addEventListener("click", enableNotifications);
 });
 
 document.querySelectorAll(".tab").forEach(tab => {
@@ -233,11 +244,4 @@ document.querySelectorAll(".tab").forEach(tab => {
 });
 
 setInterval(loadContests, 5 * 60 * 1000);
-setInterval(checkContestReminders, 60 * 1000);
 loadContests();
-
-if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").then(() => {
-        console.log("Service Worker registered");
-    }).catch(err => console.log("SW error:", err));
-}
