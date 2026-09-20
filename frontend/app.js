@@ -1,197 +1,247 @@
-// ==========================================
-// 1. NOTIFICATION SETUP
-// ==========================================
-const publicVapidKey = 'BL3jfd7IAJvcpsLJQJA0yg9ACT13mfqd6ljPET0sJEEyNb4ffVVtXVZqp1y3RsvPb9N1SeC1f_jZaP37gn0UfXU';
+const API = "https://contest-reminder-api-t38o.onrender.com";
+let currentTab = "today";
+let allContests = [];
+let countdownInterval = null;
+let swRegistration = null;
 
-async function enableNotifications() {
-    if (!('serviceWorker' in navigator)) {
-        alert("Your browser does not support notification.");
-        return;
-    }
-
+async function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return null;
     try {
-        const register = await navigator.serviceWorker.register('/sw.js', {
-            scope: '/'
-        });
-
-        const permission = await Notification.requestPermission();
-        if (permission !== 'granted') {
-            alert("Notification permission denied. Please allow from browser settings.");
-            return;
-        }
-
-        const subscription = await register.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(publicVapidKey)
-        });
-
-        await fetch('/.netlify/functions/save-subscription', {
-            method: 'POST',
-            body: JSON.stringify(subscription),
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-        document.getElementById('notify-btn').classList.add('active');
-        document.getElementById('notify-btn').innerText = '🔔';
-        updateStatus("✅ Notifications enabled!");
-        localStorage.setItem('notificationsEnabled', 'true');
-
-    } catch (error) {
-        console.error('Error:', error);
-        updateStatus("❌ Notification setup failed.");
+        swRegistration = await navigator.serviceWorker.register("./sw.js");
+        console.log("SW registered");
+        return swRegistration;
+    } catch (e) {
+        console.error("SW error:", e);
+        return null;
     }
 }
 
 function urlBase64ToUint8Array(base64String) {
-    const padding = '='.repeat((4 - base64String.length % 4) % 4);
-    const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
-    const rawData = window.atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) {
-        outputArray[i] = rawData.charCodeAt(i);
+    const padding = "=".repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const rawData = atob(base64);
+    return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
+
+async function subscribeToPush() {
+    if (!swRegistration) {
+        swRegistration = await registerServiceWorker();
     }
-    return outputArray;
-}
+    if (!swRegistration) return false;
 
-// ==========================================
-// 2. STATE
-// ==========================================
-let allContests = [];
-let currentTab = 'today';
-
-const notifyBtn = document.getElementById('notify-btn');
-notifyBtn.addEventListener('click', enableNotifications);
-
-// Agar pehle se enable hai toh button active dikhao
-if (localStorage.getItem('notificationsEnabled') === 'true') {
-    notifyBtn.classList.add('active');
-}
-
-// ==========================================
-// 3. TABS
-// ==========================================
-document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        currentTab = tab.dataset.tab;
-        renderContests();
-    });
-});
-
-// ==========================================
-// 4. FETCH CONTESTS (Codeforces + AtCoder)
-// ==========================================
-async function fetchContests() {
-    updateStatus("Fetching contests...");
-    const now = Math.floor(Date.now() / 1000);
-    let contests = [];
-
-    // --- Codeforces ---
     try {
-        const cfRes = await fetch('https://codeforces.com/api/contest.list?gym=false');
-        const cfData = await cfRes.json();
-        const cfContests = cfData.result
-            .filter(c => c.phase === 'BEFORE' || c.phase === 'CODING')
-            .map(c => ({
-                name: c.name,
-                platform: 'codeforces',
-                startTime: c.startTimeSeconds,
-                duration: c.durationSeconds,
-                url: `https://codeforces.com/contest/${c.id}`,
-                phase: c.phase,
-                endTime: c.startTimeSeconds + c.durationSeconds
-            }));
-        contests = contests.concat(cfContests);
+        const res = await fetch(`${API}/api/vapid-public-key`);
+        const { publicKey } = await res.json();
+
+        if (!publicKey) {
+            console.error("No VAPID public key from backend");
+            return false;
+        }
+
+        const subscription = await swRegistration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey),
+        });
+
+        const saveRes = await fetch(`${API}/api/subscribe`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(subscription),
+        });
+        const saveData = await saveRes.json();
+        console.log("Subscription saved:", saveData);
+
+        return true;
     } catch (e) {
-        console.error('Codeforces fetch error:', e);
+        console.error("Push subscription failed:", e);
+        return false;
     }
-
-    // --- AtCoder (via Kenkoooo API) ---
-    try {
-        const atRes = await fetch('https://kenkoooo.com/atcoder/resources/contests.json');
-        const atData = await atRes.json();
-        const atContests = atData
-            .filter(c => c.start_epoch_second + c.duration_second > now)
-            .map(c => ({
-                name: c.title,
-                platform: 'atcoder',
-                startTime: c.start_epoch_second,
-                duration: c.duration_second,
-                url: `https://atcoder.jp/contests/${c.id}`,
-                phase: c.start_epoch_second > now ? 'BEFORE' : 'CODING',
-                endTime: c.start_epoch_second + c.duration_second
-            }));
-        contests = contests.concat(atContests);
-    } catch (e) {
-        console.error('AtCoder fetch error:', e);
-    }
-
-    // Sort by start time
-    contests.sort((a, b) => a.startTime - b.startTime);
-    allContests = contests;
-
-    updateStatus(`Updated: ${new Date().toLocaleTimeString()} • ${contests.length} contests`);
-    renderContests();
 }
 
-// ==========================================
-// 5. RENDER CONTESTS
-// ==========================================
-function renderContests() {
-    const listEl = document.getElementById('contest-list');
-    const now = Math.floor(Date.now() / 1000);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-    const todayEndSec = Math.floor(todayEnd.getTime() / 1000);
-
-    let filtered = [];
-
-    if (currentTab === 'today') {
-        filtered = allContests.filter(c => c.startTime >= now && c.startTime <= todayEndSec);
-    } else if (currentTab === 'upcoming') {
-        filtered = allContests.filter(c => c.startTime > todayEndSec);
-    } else if (currentTab === 'live') {
-        filtered = allContests.filter(c => c.startTime <= now && c.endTime > now);
+function updateNotifyButton() {
+    const btn = document.getElementById("notify-btn");
+    if (!btn) return;
+    if (Notification.permission === "granted") {
+        btn.classList.add("on");
+        btn.textContent = "🔔";
+        btn.title = "Notifications ON (server-side)";
+    } else if (Notification.permission === "denied") {
+        btn.classList.remove("on");
+        btn.textContent = "🔕";
+        btn.title = "Notifications blocked";
+    } else {
+        btn.classList.remove("on");
+        btn.textContent = "🔔";
+        btn.title = "Click to enable notifications";
     }
+}
 
-    if (filtered.length === 0) {
-        listEl.innerHTML = `<div class="empty-state">No ${currentTab} contests. 🎉</div>`;
+async function enableNotifications() {
+    if (!("Notification" in window)) {
+        alert("Your browser doesn't support notifications");
         return;
     }
 
-    listEl.innerHTML = filtered.map(c => {
-        const isLive = c.startTime <= now && c.endTime > now;
-        const startDate = new Date(c.startTime * 1000);
-        const timeStr = isLive 
-            ? '🔴 LIVE NOW' 
-            : startDate.toLocaleString('en-IN', { 
-                day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' 
-              });
-        const hours = Math.floor(c.duration / 3600);
-        const mins = Math.floor((c.duration % 3600) / 60);
+    const perm = await Notification.requestPermission();
+    updateNotifyButton();
 
+    if (perm !== "granted") {
+        alert("Notifications blocked. Please allow from browser settings.");
+        return;
+    }
+
+    const ok = await subscribeToPush();
+    if (ok) {
+        new Notification("✅ Notifications enabled!", {
+            body: "You'll get alerts 1 hour and 15 min before contests, even when app is closed.",
+            icon: "./icon-192.png",
+        });
+    } else {
+        alert("Permission granted but push subscription failed. Check console.");
+    }
+}
+
+async function loadContests() {
+    try {
+        document.getElementById("status").textContent = "Loading...";
+        const res = await fetch(`${API}/api/contests`);
+        const data = await res.json();
+        allContests = data.contests;
+        document.getElementById("status").textContent =
+            `Updated: ${new Date(data.updated).toLocaleTimeString()} • ${data.count} contests`;
+        render();
+        startCountdown();
+    } catch (e) {
+        document.getElementById("status").textContent = "❌ Backend not reachable";
+        console.error(e);
+    }
+}
+
+function formatDuration(ms) {
+    if (ms < 0) return "0s";
+    const totalSec = Math.floor(ms / 1000);
+    const days = Math.floor(totalSec / 86400);
+    const hours = Math.floor((totalSec % 86400) / 3600);
+    const minutes = Math.floor((totalSec % 3600) / 60);
+    const seconds = totalSec % 60;
+
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+    if (minutes > 0) return `${minutes}m ${seconds}s`;
+    return `${seconds}s`;
+}
+
+function getEndTime(c) {
+    const start = new Date(c.start);
+    const m = (c.duration || "").match(/(\d+)h\s*(\d+)m/);
+    if (m) return new Date(start.getTime() + (parseInt(m[1]) * 60 + parseInt(m[2])) * 60000);
+    return new Date(start.getTime() + 2 * 60 * 60 * 1000);
+}
+
+function getStatusText(c) {
+    const now = new Date();
+    const start = new Date(c.start);
+    const end = getEndTime(c);
+
+    if (now >= start && now <= end) {
+        return { text: `🔴 LIVE • ${formatDuration(now - start)} elapsed`, cls: "live" };
+    } else if (now < start) {
+        return { text: `⏳ Starts in ${formatDuration(start - now)}`, cls: "upcoming" };
+    } else {
+        return { text: `✅ Ended`, cls: "ended" };
+    }
+}
+
+function render() {
+    const list = document.getElementById("contest-list");
+    const today = new Date().toISOString().split("T")[0];
+    let filtered = [];
+
+    if (currentTab === "today") {
+        filtered = allContests.filter(c => c.date === today);
+    } else if (currentTab === "live") {
+        filtered = allContests.filter(c => {
+            const now = new Date();
+            return now >= new Date(c.start) && now <= getEndTime(c);
+        });
+    } else {
+        filtered = allContests.filter(c => c.status === "upcoming").slice(0, 30);
+    }
+
+    if (filtered.length === 0) {
+        list.innerHTML = `<div class="empty">No contests here 😴</div>`;
+        return;
+    }
+
+    list.innerHTML = filtered.map(c => {
+        const s = getStatusText(c);
         return `
-            <div class="contest-card ${isLive ? 'live' : ''}">
-                <span class="platform ${c.platform}">${c.platform}</span>
-                <h3>${c.name}</h3>
-                <div class="meta">
-                    <span>🕒 ${timeStr}</span>
-                    <span>⏳ ${hours}h ${mins}m</span>
-                </div>
-                <a href="${c.url}" target="_blank">Open Contest →</a>
+        <div class="card ${s.cls}" data-start="${c.start}" data-duration="${c.duration}">
+            <div class="card-header">
+                <span class="site ${c.site}">${c.site}</span>
+                <span class="time">${c.start_time}</span>
             </div>
+            <div class="name">${c.name}</div>
+            <div class="meta">
+                <span class="countdown">${s.text}</span>
+                <span>⏱ ${c.duration}</span>
+                <span>📅 ${c.date}</span>
+            </div>
+            ${c.url ? `<a href="${c.url}" target="_blank">Open Contest →</a>` : ""}
+        </div>
         `;
-    }).join('');
+    }).join("");
 }
 
-function updateStatus(msg) {
-    document.getElementById('status').innerText = msg;
+function updateCountdowns() {
+    document.querySelectorAll(".card").forEach(card => {
+        const startStr = card.dataset.start;
+        const duration = card.dataset.duration;
+        const el = card.querySelector(".countdown");
+        if (!el || !startStr) return;
+
+        const now = new Date();
+        const start = new Date(startStr);
+        const m = (duration || "").match(/(\d+)h\s*(\d+)m/);
+        let end = new Date(start);
+        if (m) end = new Date(start.getTime() + (parseInt(m[1]) * 60 + parseInt(m[2])) * 60000);
+        else end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+
+        if (now >= start && now <= end) {
+            card.classList.remove("upcoming");
+            card.classList.add("live");
+            el.textContent = `🔴 LIVE • ${formatDuration(now - start)} elapsed`;
+        } else if (now < start) {
+            el.textContent = `⏳ Starts in ${formatDuration(start - now)}`;
+        } else {
+            card.classList.remove("upcoming", "live");
+            card.classList.add("ended");
+            el.textContent = `✅ Ended`;
+        }
+    });
 }
 
-// ==========================================
-// 6. INIT
-// ==========================================
-fetchContests();
-// Har 5 minute mein refresh
-setInterval(fetchContests, 5 * 60 * 1000);
+function startCountdown() {
+    if (countdownInterval) clearInterval(countdownInterval);
+    countdownInterval = setInterval(updateCountdowns, 1000);
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+    await registerServiceWorker();
+    updateNotifyButton();
+
+    const btn = document.getElementById("notify-btn");
+    if (btn) btn.addEventListener("click", enableNotifications);
+});
+
+document.querySelectorAll(".tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        currentTab = tab.dataset.tab;
+        render();
+    });
+});
+
+setInterval(loadContests, 5 * 60 * 1000);
+loadContests();
