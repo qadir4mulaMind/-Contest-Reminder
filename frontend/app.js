@@ -1,4 +1,4 @@
-const API = "http://localhost:8000";
+const API = "https://contest-reminder-api-t38o.onrender.com";
 let currentTab = "today";
 let allContests = [];
 let countdownInterval = null;
